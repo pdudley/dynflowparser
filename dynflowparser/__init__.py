@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 
 from dynflowparser.lib.configuration import Conf
 from dynflowparser.lib.outputhtml import OutputHtml
@@ -170,18 +171,21 @@ class DynflowParser:
             if (dfrom <= starts <= dto) or (dfrom <= ends <= dto):
                 if not self.conf.args.showall:
                     if dline[headers.index('result')] != 'success':
-                        self.conf.dynflowdata['includedUUID'].append(
+                        self.conf.dynflowdata['includedUUID'].add(
                             dline[headers.index('external_id')]
                         )
                 else:
-                    self.conf.dynflowdata['includedUUID'].append(
+                    self.conf.dynflowdata['includedUUID'].add(
                         dline[headers.index('external_id')]
                         )
-        # Write Tasks to SQLite
+        # Write Tables to SQLite (parallel per table)
         if self.conf.writesql:
-            for d in ['tasks', 'plans', 'actions', 'steps']:
-                dynflow = self.read_dynflow(d)
-                sqlite.write(d, dynflow)
+            def _write_table(dtype):
+                sqlite.write(dtype, self.read_dynflow(dtype))
+
+            with ThreadPoolExecutor(max_workers=self.conf.args.workers) as pool:
+                list(pool.map(_write_table,
+                              ['tasks', 'plans', 'actions', 'steps']))
         ###
         # Enrich Plugins
         # dynflowpolling = DynflowPolling(self.conf)

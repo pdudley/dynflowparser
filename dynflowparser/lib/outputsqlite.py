@@ -11,8 +11,9 @@ class OutputSQLite:
     def __init__(self, conf):
         self.conf = conf
         self.util = Util(conf.args.debug)
-        self._conn = sqlite3.connect(conf.dbfile)
+        self._conn = sqlite3.connect(conf.dbfile, check_same_thread=False)
         self._cursor = self._conn.cursor()
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self.create_tables()
 
     def __enter__(self):
@@ -104,6 +105,7 @@ class OutputSQLite:
         state_updated_at INTEGER
         )""")
         self.execute("CREATE INDEX tasks_id ON tasks(id)")
+        self.execute("CREATE INDEX tasks_external_id ON tasks(external_id)")
         self.commit()
 
     def create_plans(self):
@@ -144,6 +146,8 @@ class OutputSQLite:
         self.execute("""CREATE INDEX actions_execution_plan_id
                      ON actions(execution_plan_uuid)""")
         self.execute("CREATE INDEX actions_id ON actions(id)")
+        self.execute("""CREATE INDEX actions_uuid_id
+                     ON actions(execution_plan_uuid, id)""")
         self.commit()
 
     def create_steps(self):
@@ -169,6 +173,8 @@ class OutputSQLite:
                      ON steps(execution_plan_uuid)""")
         self.execute("CREATE INDEX steps_action_id ON steps(action_id)")
         self.execute("CREATE INDEX steps_id ON steps(id)")
+        self.execute("""CREATE INDEX steps_uuid_action_id
+                     ON steps(execution_plan_uuid, action_id)""")
         self.commit()
 
     def insert_multi(self, dtype, rows):
@@ -183,7 +189,21 @@ class OutputSQLite:
         else:
             print(f"ERROR: Unknown table '{dtype}'")
 
+    def _insert_batch(self, conn, dtype, rows):
+        """Insert a batch using a thread-local connection."""
+        placeholders = {
+            'tasks': 14, 'plans': 15, 'actions': 11, 'steps': 16
+        }
+        n = placeholders[dtype]
+        query = f"INSERT INTO {dtype} VALUES ({','.join('?' * n)})"
+        conn.executemany(query, rows)
+        conn.commit()
+
     def write(self, dtype, csv):
+        # Each thread gets its own connection to avoid cursor contention
+        conn = sqlite3.connect(self.conf.dbfile)
+        conn.execute("PRAGMA journal_mode=WAL")
+
         pb = ProgressBarFromFileLines()
         datefields = self.conf.dynflowdata[dtype]['dates']
         jsonfields = self.conf.dynflowdata[dtype]['json']
@@ -228,14 +248,15 @@ class OutputSQLite:
                 self.util.debug("I", str(fields))
                 multi.append(fields)
                 if i > 999 and i % 1000 == 0:  # insert every 1000 records
-                    self.insert_multi(dtype, multi)
+                    self._insert_batch(conn, dtype, multi)
                     multi = []
                 if not self.conf.args.quiet:
                     pb.print_bar(i)
 
         if len(multi) > 0:
-            self.insert_multi(dtype, multi)
-            multi = []
+            self._insert_batch(conn, dtype, multi)
+
+        conn.close()
 
         if not self.conf.args.quiet:
             seconds = time.time() - start_time

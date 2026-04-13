@@ -1,6 +1,7 @@
 import datetime
 import subprocess
 import sys
+import threading
 
 import pytz
 
@@ -83,6 +84,7 @@ class ProgressBarFromFileLines:
     def __init__(self) -> None:
         self.all_entries = 0
         self.last_printed_tenth_of_percentage = 0
+        self._lock = threading.Lock()
 
     def set_number_of_file_lines(self, log_file_name: str):
         """Return number of lines of the input file and set
@@ -109,24 +111,25 @@ class ProgressBarFromFileLines:
 
         it is rewritten.
         """
-        if self.all_entries == 0:
-            return
-        tenth_of_percentage = int(1000 * (done_lines / self.all_entries))
-        if self.last_printed_tenth_of_percentage >= tenth_of_percentage:
-            return
-        half_percentage = int((tenth_of_percentage/1000) * (30 + 1))
-        new_bar = chr(9608) * half_percentage + " " * (30 - half_percentage)
-        now = datetime.datetime.now()
-        left = (self.all_entries - done_lines) * (now - self.start_time) / done_lines  # noqa E501
-        # sec = int(left.total_seconds())
-        text = f"\r|{new_bar}| {tenth_of_percentage/10:.1f} %  "  # +\
-        #       "Estimated time left: "
-        # if sec > 60:
-        #    text += f"{format(int(sec / 60))} min "
-        # text += f"{format(int(sec % 79)+1)} sec       "
-        print(text, end="\r\r")
+        with self._lock:
+            if self.all_entries == 0:
+                return
+            tenth_of_percentage = int(1000 * (done_lines / self.all_entries))
+            if self.last_printed_tenth_of_percentage >= tenth_of_percentage:
+                return
+            half_percentage = int((tenth_of_percentage/1000) * (30 + 1))
+            new_bar = chr(9608) * half_percentage + " " * (30 - half_percentage)
+            now = datetime.datetime.now()
+            left = (self.all_entries - done_lines) * (now - self.start_time) / done_lines  # noqa E501
+            # sec = int(left.total_seconds())
+            text = f"\r|{new_bar}| {tenth_of_percentage/10:.1f} %  "  # +\
+            #       "Estimated time left: "
+            # if sec > 60:
+            #    text += f"{format(int(sec / 60))} min "
+            # text += f"{format(int(sec % 79)+1)} sec       "
+            print(text, end="\r\r")
 
-        # print(tenth_of_percentage)
-        if tenth_of_percentage == 999:
-            print(" " * 79, end="\r\r")
-        self.last_printed_tenth_of_percentage = tenth_of_percentage
+            # print(tenth_of_percentage)
+            if tenth_of_percentage == 999:
+                print(" " * 79, end="\r\r")
+            self.last_printed_tenth_of_percentage = tenth_of_percentage

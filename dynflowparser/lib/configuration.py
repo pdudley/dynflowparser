@@ -15,7 +15,7 @@ class Conf:
             'plans': {'times': 0},
             'steps': {'times': 0},
             'actions': {'times': 0},
-            'includedUUID': [],
+            'includedUUID': set(),
             }
         self.pulpcoredata = {
             'version': "0",
@@ -83,6 +83,13 @@ class Conf:
             help="Quiet. Don't show progress bar.",
             default=False,
             action='store_true'
+            )
+        self.parser.add_argument(
+            '-w',
+            '--workers',
+            help="Number of worker threads for parallel processing. Default is min(4, CPU count).",
+            default=min(4, os.cpu_count() or 1),
+            type=int
             )
         self.parser.add_argument(
             '-o',

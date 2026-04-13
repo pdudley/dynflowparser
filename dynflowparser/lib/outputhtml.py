@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
@@ -24,6 +25,8 @@ class OutputHtml:
         self.pulp_total_exectime = {}
         self.pulp_total_rel_exectime = {}
         self.dynflow_plans_exectime = {}
+        parent = os.path.dirname(os.path.realpath(__file__)) + "/../templates/"
+        self._jinja_env = Environment(loader=FileSystemLoader(parent))
 
     def __enter__(self):
         return self
@@ -179,7 +182,7 @@ class OutputHtml:
     def write_actions(self):
         self.util.debug("I", "writeActionTree")
         c = 0
-        # fetch steps
+        # fetch steps (defer show_json to render phase)
         steps = {}
         sql = "SELECT * FROM steps ORDER BY id"
         rows = self.db.query(sql)
@@ -187,10 +190,6 @@ class OutputHtml:
             if not self.conf.args.showall and r[8] == "success":
                 continue
             r = list(r)
-            r[12] = self.show_json(r[12])
-            r[13] = self.show_json(r[13])
-            r[14] = self.show_json(r[14])
-            r[15] = self.show_json(r[15])
             if r[0] in steps.keys():
                 if r[2] in steps[r[0]].keys():
                     steps[r[0]][r[2]].append(r)
@@ -199,7 +198,7 @@ class OutputHtml:
             else:
                 steps[r[0]] = {r[2]: [r]}
 
-        # fetch actions
+        # fetch actions (defer show_json to render phase)
         actions = {}
         sql = ("SELECT s.action_id, p.uuid, a.caller_action_id,"
                + " a.run_step_id, s.action_class, a.data, a.input, a.output,"
@@ -222,9 +221,6 @@ class OutputHtml:
             self.sum_pulp_plans_exectime(r[1], r[7])
             self.sum_dynflow_plans_exectime(r[1], r[4], r[15])
             r = list(r[:-1])
-            r[5] = self.show_json(r[5])
-            r[6] = self.show_json(r[6])
-            r[7] = self.show_json(r[7])
             if r[1] in steps.keys() and r[0] in steps[r[1]].keys():
                 r.append(steps[r[1]][r[0]])
             else:
@@ -234,35 +230,54 @@ class OutputHtml:
             else:
                 actions[r[1]] = [r]
 
-        # write output
-        for execution_plan_uuid, data in actions.items():
-            c = c + 1
-            outputfile = self.conf.args.output_path + "/actions/" + execution_plan_uuid + ".html"  # noqa E501
+        # render per-plan HTML files in parallel (show_json runs here)
+        def _render_plan(item):
+            execution_plan_uuid, data = item
+            # format JSON fields for display
+            for action in data:
+                action[5] = self.show_json(action[5])
+                action[6] = self.show_json(action[6])
+                action[7] = self.show_json(action[7])
+                for s in action[15]:
+                    s[12] = self.show_json(s[12])
+                    s[13] = self.show_json(s[13])
+                    s[14] = self.show_json(s[14])
+                    s[15] = self.show_json(s[15])
+            outputfile = (self.conf.args.output_path + "/actions/"
+                          + execution_plan_uuid + ".html")
             context = {
                 "actions": data,
                 "label": data[0][9],
                 "execution_plan_uuid": execution_plan_uuid,
                 "caller_execution_plan_id": data[0][11],
                 "pulp_exectime": sorted(
-                    self.pulp_plans_exectime[execution_plan_uuid].items(),
+                    self.pulp_plans_exectime.get(
+                        execution_plan_uuid, {}).items(),
                     key=lambda item: item[1],
                     reverse=True)[:5],
                 "dynflow_exectime": sorted(
-                    self.dynflow_plans_exectime[execution_plan_uuid].items(),
+                    self.dynflow_plans_exectime.get(
+                        execution_plan_uuid, {}).items(),
                     key=lambda item: item[1],
                     reverse=True)[:5],
             }
-            self.write_report(context, "actions.html", outputfile)  # noqa E501
-            if not self.conf.args.quiet:
-                self.pb.print_bar(c)
+            self.write_report(context, "actions.html", outputfile)
+
+        with ThreadPoolExecutor(max_workers=self.conf.args.workers) as executor:
+            list(executor.map(_render_plan, actions.items()))
+        c = len(actions)
+
+        if not self.conf.args.quiet:
+            self.pb.print_bar(c)
         self.write_report({'actions': actions}, "tasks.csv",
                           self.conf.args.output_path + "/dynflowparser.csv")
         seconds = time.time() - start_time
-        speed = round(c/seconds)
-        if not self.conf.args.quiet:
-            print("  - Written " + str(c) + " output plans in "
-                  + self.util.seconds_to_str(seconds)
-                  + " (" + str(speed) + " lines/second)")
+        if c > 0:
+            speed = round(c/seconds)
+            if not self.conf.args.quiet:
+                print("  - Written " + str(c) + " output plans in "
+                      + self.util.seconds_to_str(seconds)
+                      + " (" + str(speed) + " lines/second)")
 
     def show_json(self, txt):
         try:
@@ -278,16 +293,6 @@ class OutputHtml:
             'sos': self.conf.sos
             })
         self.util.debug("D", "write_report " + outputfile)
-        # Load template
-        parent = os.path.dirname(os.path.realpath(__file__)) + "/../templates/"
-        environment = Environment(loader=FileSystemLoader(parent))
-        template = environment.get_template(templatefile)
-        # ##### could be useful in the future
-        # ##### it can make functions available on jinja2 space
-        # # func_dict = {
-        # #     "show_json": self.show_json
-        # # }
-        # # template.globals.update(func_dict)
-        # Write output csv file
+        template = self._jinja_env.get_template(templatefile)
         with open(outputfile, mode="w", encoding="utf-8") as results:
             results.write(template.render(context))

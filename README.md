@@ -27,7 +27,7 @@ pip install dynflowparser
 
 #### `dynflowparser` Usage
 ~~~
-usage: dynflowparser [-h] [-a] [-d {D,I,W,E}] [-f DATE_FROM] [-t DATE_TO] [-l LAST_N_DAYS] [-n] [-q] [sosreport_path] [output_path]
+usage: dynflowparser [-h] [-a] [-d {D,I,W,E}] [-f DATE_FROM] [-t DATE_TO] [-l LAST_N_DAYS] [-n] [-q] [-w WORKERS] [sosreport_path] [output_path]
 
 Get sosreport dynflow files and generates user friendly html pages for tasks, plans, actions and steps
 
@@ -48,6 +48,10 @@ optional arguments:
                         Parse only last N days. Overrides `--from` and `--to`.
   -n, --nosql           Reuse existent sqlite file. (Useful for development).
   -q, --quiet           Quiet. Don't show progress bar.
+  -w WORKERS, --workers WORKERS
+                        Number of worker threads for parallel processing.
+                        Default is min(4, CPU count). Use -w 1 to disable
+                        multi-threading.
 ~~~ 
 
 #### `dynflowparser-export-tasks` Usage
